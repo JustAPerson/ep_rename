@@ -115,6 +115,15 @@ argparser.add_argument(
           occur before creating any symbolic links.'
 )
 argparser.add_argument(
+    '--resolve-overlaps',
+    choices=['error', 'newest', 'oldest', 'any'],
+    default = 'error',
+    help='The method for resolving conflicts when multiple source files \
+          generate the same output file. The `newest` and `oldest` choices \
+          will use the source files\' modified timestamp (resolving symbolic  \
+          links). Use the `any` choice if you don\'t care which file is chosen.'
+)
+argparser.add_argument(
     '--dry',
     action='store_true',
     help='Perform a dry run; don\'t modify the filesystem.'
@@ -125,6 +134,13 @@ argparser.add_argument(
     default=0,
     help='Specify what files are created. Use `-vv` to see more details.'
 )
+
+
+def sort_inputs_by_time(paths):
+    paths.sort(key=lambda p: p['file'].stat().st_mtime)
+
+def sort_inputs_by_num(parts):
+    parts.sort(key=lambda p: int(p['number'])) # handle sorting ep 101 after episode 2
 
 class Program:
     def __init__(self, args):
@@ -148,7 +164,7 @@ class Program:
     def run(self):
         files = [f for f in Path('.').iterdir() if f.is_file()]
         parts = list(map(self.extract_parts, files))
-        parts.sort(key=lambda p: int(p['number'])) # handle sorting ep 101 after episode 2
+        sort_inputs_by_num(parts)
 
         if self.args.skip:
             skip = int(self.args.skip)
@@ -167,8 +183,8 @@ class Program:
         self.try_zero_pad(parts)
         self.calc_destinations(parts)
 
-        self.check_overwrites(parts)
         self.check_overlaps(parts)
+        self.check_overwrites(parts)
 
         for p in parts:
             old = p['file']
@@ -228,20 +244,59 @@ class Program:
                 sys.exit(1)
 
     def check_overlaps(self, parts):
-        if len(parts) > len(set(map(lambda p: p['dest'], parts))):
-            sources_dict = {}
-            for p in parts:
-                dest = str(p['dest'])
-                src = str(p['file'])
-                sources_dict[dest] = sources_dict.get(dest, []) + [src]
-            oops = filter((lambda item: len(item[1]) > 1), sources_dict.items())
-            oops = sorted(oops)
+        if len(parts) == len(set(map(lambda p: p['dest'], parts))):
+            # each input maps to a unique output
+            return
+
+        sources_dict = {}
+        for p in parts:
+            dest = str(p['dest'])
+            src = p
+            sources_dict[dest] = sources_dict.get(dest, []) + [src]
+        oops = filter((lambda item: len(item[1]) > 1), sources_dict.items())
+        oops = sorted(oops)
+
+        if self.args.resolve_overlaps == 'error':
             for dest, sources in oops:
+                sort_inputs_by_time(sources)
                 self.log(0, 'the following files all map to {!r}:'.format(dest))
                 for src in sources:
-                    self.log(0, '  ' + str(src))
+                    self.log(0, '  ' + str(src['file']))
+            self.log(0, '')
+            self.log(0, 'use the `--resolve-overlaps` flag to proceed')
+            self.log(0, 'files above are already shown in ascending date order')
             sys.exit(1)
+        else:
+            def oldest(paths):
+                sort_inputs_by_time(paths)
+                return paths[0], paths[1:]
 
+            def newest(paths):
+                sort_inputs_by_time(paths)
+                return paths[-1], paths[:-1]
+
+            def any(paths):
+                return paths[0], paths[1:]
+
+            methods = {
+                'oldest': oldest,
+                'newest': newest,
+                'any': any,
+            }
+            method = methods[self.args.resolve_overlaps]
+
+            remove = []
+            self.log(1, 'using overlap resolution: ' + self.args.resolve_overlaps)
+            for _, sources in oops:
+                chosen, ignored = method(sources)
+                self.log(1, 'choosing {!r} for {!r} in favor of {!r}'
+                            .format(str(chosen['file']), dest, [str(i['file']) for i in ignored]))
+                remove += ignored
+
+            for p in remove:
+                # O(n^2) but who will have 1000 files all overlapping? ....
+                # Much easier than trying to perform set operations dicts
+                parts.remove(p)
 
 def is_nonneg(s):
     try:
