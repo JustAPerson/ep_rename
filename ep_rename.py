@@ -80,7 +80,6 @@ argparser.add_argument(
 class NegateAction(argparse.Action):
     """Taken from https://stackoverflow.com/a/34736291/5991105"""
     def __call__(self, parser, ns, values, option):
-        print(self, ns, values, option)
         setattr(ns, self.dest, option[2:4] != 'no')
 argparser.add_argument(
     '--renumber', '--no-renumber',
