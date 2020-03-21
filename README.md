@@ -23,7 +23,7 @@ You could add `--strip-leading-zeros` to do the obvious, or use `--zero-pad 3`
 to add an extra zero. If you had 100 episodes, `--zero-pad` without an argument
 will automatically deduce the width should be three.
 
-Consider a directory with multiple seasons worth all numbers sequentially:
+Consider a directory with multiple seasons worth all numbered sequentially:
 
     ./Dragon Ball - 001 [x264].mkv
     ./Dragon Ball - 002 [x264].mkv
