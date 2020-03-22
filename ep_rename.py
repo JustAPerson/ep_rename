@@ -342,7 +342,7 @@ class Program:
 
         self.try_renumber(inputs)
         self.try_strip_leading_zeros(inputs)
-        self.try_strip_season(inputs)
+        self.try_add_or_strip_season(inputs)
         self.try_zero_pad(inputs)
         self.calc_destinations(inputs)
 
@@ -391,12 +391,17 @@ class Program:
                 i += 1
                 self.log_renumbered('renumber', input, old, new)
 
-    def try_strip_season(self, inputs):
-        if self.args.strip_season:
+    def try_add_or_strip_season(self, inputs):
+        if self.args.season:
+            for input in inputs:
+                old = input['number']
+                new = Number(self.args.season, old.episode)
+                input['number'] = new
+                self.log_renumbered('add_season', input, old, new)
+        elif self.args.strip_season:
             for input in inputs:
                 old = input['number']
                 new = Number(None, old.episode)
-                new.season = None
                 input['number'] = new
                 self.log_renumbered('strip_season', input, old, new)
 
