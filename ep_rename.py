@@ -151,11 +151,11 @@ argparser.add_argument(
 )
 
 
-def sort_inputs_by_time(paths):
-    paths.sort(key=lambda p: p['file'].stat().st_mtime)
+def sort_inputs_by_time(inputs):
+    inputs.sort(key=lambda p: p['file'].stat().st_mtime)
 
-def sort_inputs_by_num(parts):
-    parts.sort(key=lambda p: p['number'])
+def sort_inputs_by_num(inputs):
+    inputs.sort(key=lambda p: p['number'])
 
 class Number:
     def __init__(self, season, episode):
@@ -187,10 +187,10 @@ class Program:
         if level <= self.args.verbose:
             print(msg, file=sys.stderr)
 
-    def extract_parts(self, f):
+    def extract_input(self, f):
         # remove group prefixes like `./[SubGroup] Title.mkv`
-        parts = {}
-        parts['file'] = f
+        input = {}
+        input['file'] = f
 
         without_group = re.fullmatch(r'(?:\[.*?\])?(.*)', f.name).group(1)
         seasoned = re.search(r'[sS]([0-9]+)[eE]([0-9]+).*(\..+)', without_group)
@@ -200,44 +200,44 @@ class Program:
         elif unseasoned:
             episode, suffix = unseasoned.group(1, 2)
             season = None
-        parts['number'] = Number(season, episode)
-        parts['suffix'] = suffix
+        input['number'] = Number(season, episode)
+        input['suffix'] = suffix
 
         self.log(2,
                  'extracted season={!r} episode={!r} suffix={!r} from file={!r}'
                  .format(season, episode, suffix, str(f)))
-        return parts
+        return input
 
     def run(self):
         files = [f for f in Path('.').iterdir() if f.is_file()]
-        parts = list(map(self.extract_parts, files))
-        sort_inputs_by_num(parts)
+        inputs = list(map(self.extract_input, files))
+        sort_inputs_by_num(inputs)
 
         if self.args.skip:
             skip = int(self.args.skip)
-            if skip >= len(parts):
+            if skip >= len(inputs):
                 self.log(0, 'warning: skipping all files')
-            parts = parts[skip:]
+            inputs = inputs[skip:]
 
         if self.args.first:
             first = int(self.args.first)
-            if first > len(parts):
+            if first > len(inputs):
                 self.log(0, 'warning: there are only {} files but given --first={}'
-                            .format(len(parts), first))
-            parts = parts[:first]
+                            .format(len(inputs), first))
+            inputs = inputs[:first]
 
-        self.try_renumber(parts)
-        self.try_strip_leading_zeros(parts)
-        self.try_strip_season(parts)
-        self.try_zero_pad(parts)
-        self.calc_destinations(parts)
+        self.try_renumber(inputs)
+        self.try_strip_leading_zeros(inputs)
+        self.try_strip_season(inputs)
+        self.try_zero_pad(inputs)
+        self.calc_destinations(inputs)
 
-        self.check_overlaps(parts)
-        self.check_overwrites(parts)
+        self.check_overlaps(inputs)
+        self.check_overwrites(inputs)
 
-        for p in parts:
-            old = p['file']
-            new = p['dest']
+        for input in inputs:
+            old = input['file']
+            new = input['dest']
             if not self.args.dry:
                 if self.args.overwrite and new.exists():
                     self.log(0, 'removing existing file ' + repr(str(new)))
@@ -245,64 +245,63 @@ class Program:
                 new.symlink_to(old.resolve())
             self.log(1, 'created symbolic link from {!r} to {!r}'.format(str(new), str(old)))
 
-    def log_renumbered(self, func, part, old, new):
+    def log_renumbered(self, func, input, old, new):
         if old != new:
             self.log(2, '{}: renumbered {!r} from {} to {}'
-                        .format(func, str(part['file']), old, new))
+                        .format(func, str(input['file']), old, new))
 
-    def try_renumber(self, parts):
+    def try_renumber(self, inputs):
         if self.args.renumber:
             i = int(self.args.renumber_start)
-            for p in parts:
-                old = p['number']
+            for input in inputs:
+                old = input['number']
                 new = Number(old.season, str(i))
-                p['number'] = new
+                input['number'] = new
                 i += 1
-                self.log_renumbered('renumber', p, old, new)
+                self.log_renumbered('renumber', input, old, new)
 
-    def try_strip_season(self, parts):
+    def try_strip_season(self, inputs):
         if self.args.strip_season:
-            for p in parts:
-                old = p['number']
+            for input in inputs:
+                old = input['number']
                 new = Number(None, old.episode)
                 new.season = None
-                p['number'] = new
-                self.log_renumbered('strip_season', p, old, new)
+                input['number'] = new
+                self.log_renumbered('strip_season', input, old, new)
 
 
-    def try_strip_leading_zeros(self, parts):
+    def try_strip_leading_zeros(self, inputs):
         if self.args.strip_leading_zeros:
-            for p in parts:
-                old = p['number']
+            for input in inputs:
+                old = input['number']
                 new = Number(None, None)
                 new.episode = new.episode.lstrip('0') or '0'
                 new.season = new.season.lstrip('0') or '0'
-                p['number'] = new
-                self.log_renumbered('strip_leading_zeros', p, old, new)
+                input['number'] = new
+                self.log_renumbered('strip_leading_zeros', input, old, new)
 
-    def try_zero_pad(self, parts):
+    def try_zero_pad(self, inputs):
         if self.args.zero_pad:
             if type(self.args.zero_pad) is AUTO_ZERO_PAD:
-                width = max(map(lambda p: len(str(p['number'])), inputs))
+                width = max(map(lambda input: len(str(input['number'])), inputs))
             else:
                 width = int(self.args.zero_pad)
 
             fmt = '{{:0>{}}}'.format(width)
-            for p in parts:
-                old = p['number']
+            for input in inputs:
+                old = input['number']
                 new = Number(old.season, fmt.format(old.episode))
-                p['number'] = new
-                self.log_renumbered('zero_pad', p, old, new)
+                input['number'] = new
+                self.log_renumbered('zero_pad', input, old, new)
 
-    def calc_destinations(self, parts):
-        for p in parts:
-            name = '{} {number}{suffix}'.format(self.args.title, **p)
-            p['dest'] = Path(self.args.destination or './', name)
+    def calc_destinations(self, inputs):
+        for input in inputs:
+            name = '{} {number}{suffix}'.format(self.args.title, **input)
+            input['dest'] = Path(self.args.destination or './', name)
 
-
-    def check_overwrites(self, parts):
+    def check_overwrites(self, inputs):
         if not self.args.overwrite:
-            oops = [d for d in map(lambda p: p['dest'], parts) if d.exists()]
+            oops = [d for d in map(lambda input: input['dest'], inputs) if d.exists()]
             if len(oops) > 0:
                 self.log(0, 'the following files already exist:')
                 for oop in oops:
@@ -311,15 +310,15 @@ class Program:
                 self.log(0, 'use the `--overwrite` flag to ignore these.')
                 sys.exit(1)
 
-    def check_overlaps(self, parts):
-        if len(parts) == len(set(map(lambda p: p['dest'], parts))):
+    def check_overlaps(self, inputs):
+        if len(inputs) == len(set(map(lambda input: input['dest'], inputs))):
             # each input maps to a unique output
             return
 
         sources_dict = {}
-        for p in parts:
-            dest = str(p['dest'])
-            src = p
+        for input in inputs:
+            dest = str(input['dest'])
+            src = input
             sources_dict[dest] = sources_dict.get(dest, []) + [src]
         oops = filter((lambda item: len(item[1]) > 1), sources_dict.items())
         oops = sorted(oops)
@@ -361,10 +360,10 @@ class Program:
                             .format(str(chosen['file']), dest, [str(i['file']) for i in ignored]))
                 remove += ignored
 
-            for p in remove:
+            for input in remove:
                 # O(n^2) but who will have 1000 files all overlapping? ....
                 # Much easier than trying to perform set operations dicts
-                parts.remove(p)
+                inputs.remove(input)
 
 def is_nonneg(s):
     try:
