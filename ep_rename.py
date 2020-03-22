@@ -24,6 +24,7 @@ import argparse
 from pathlib import Path
 import re
 import sys
+import shutil
 
 argparser = argparse.ArgumentParser(
     description='Canonicalizes episode filenames using symbolic links',
@@ -55,8 +56,16 @@ argparser.add_argument(
 argparser.add_argument(
     '-d', '--destination',
     metavar='DIR',
-    help='The destination directory where new symbolic links will be created. \
+    help='The destination directory where new files links will be created. \
           Assumed to be the current directory.'
+)
+argparser.add_argument(
+    '--output-type',
+    choices=['symlink', 'hardlink', 'copy'],
+    default='symlink',
+    help='Specifies the file type used for the output. Both `symlink` and \
+          `hardlink` take negligibly additional disk space whereas `copy` \
+          makes an extra copy of the file.'
 )
 argparser.add_argument(
     '--first',
@@ -127,7 +136,7 @@ argparser.add_argument(
     action='store_true',
     help='Overwrite the destination file if it exists. If this flag is not \
           passed but any destination file already exists, an error will \
-          occur before creating any symbolic links.'
+          occur before creating any output files.'
 )
 argparser.add_argument(
     '--resolve-overlaps',
@@ -235,15 +244,26 @@ class Program:
         self.check_overlaps(inputs)
         self.check_overwrites(inputs)
 
+        if self.args.output_type == 'symlink':
+            method = lambda new, old: new.symlink_to(old)
+            msg = 'created symbolic link from {new!r} to {old!r}'
+        elif self.args.output_type == 'hardlink':
+            method = lambda new, old: new.link_to(old)
+            msg = 'created hard link from {new!r} to {old!r}'
+        elif self.args.output_type == 'copy':
+            method = lambda new, old: shutil.copy2(old, new)
+            msg = 'copied file to {new!r} from {old!r}'
+
         for input in inputs:
-            old = input['file']
+            old = input['file'].resolve()
             new = input['dest']
+
             if not self.args.dry:
                 if self.args.overwrite and new.exists():
                     self.log(0, 'removing existing file ' + repr(str(new)))
                     new.unlink()
-                new.symlink_to(old.resolve())
-            self.log(1, 'created symbolic link from {!r} to {!r}'.format(str(new), str(old)))
+                method(new, old)
+            self.log(1, msg.format(new=str(new), old=str(old)))
 
     def log_renumbered(self, func, input, old, new):
         if old != new:
