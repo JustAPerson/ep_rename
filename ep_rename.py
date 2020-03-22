@@ -30,20 +30,51 @@ argparser = argparse.ArgumentParser(
     description='Canonicalizes episode filenames using symbolic links',
     usage='ep_rename.py [OPTIONS] -t TITLE',
     epilog='''
-Consider a directory with the following files:
+INPUT FORMAT
+    When traversing the current directory, file names are matched against the
+    format string specified by `--input-fmt`. If a name matches, the file is
+    kept and the desired fields are extracted. Files whose name do not match
+    are ignored.
 
-    ./fullmetal_alchemist_brotherhood_-_01_[1080p_bd-rip].mkv
-    ./fullmetal_alchemist_brotherhood_-_02_[1080p_bd-rip].mkv
-    ./fullmetal_alchemist_brotherhood_-_03_[1080p_bd-rip].mkv
-    ...
+    A format string consists of sequence of literal characters and pattern
+    groups which begin with a `%`. Some pattern groups capture their matched
+    data which is used to determine metadata fields from the file name, such
+    as the season and episode number. The following pattern groups apply:
 
-Running `ep_rename.py -t "Fullmetal Alchemist Brotherhood"` will create the
-following symbolic links in the same directory:
+    %a  Matches any sequences of characters.
 
-    ./Fullmetal Alchemist Brotherhood 01.mkv
-    ./Fullmetal Alchemist Brotherhood 02.mkv
-    ./Fullmetal Alchemist Brotherhood 03.mkv
-    ...
+    %A  Matches any positive-length sequence of characters.
+
+    %b  Optionally matches multiple pairs of square bracket and the content
+        between them. Cannot handle nested brackets.
+
+    %n  Matches and captures a general episode number, which may or may not
+        specify a season number. If it specifies a season number, it must
+        follow the s1e1 pattern, case insensitive. In that case, both season
+        and specific episode numbers are extracted. This pattern group may
+        also match a single sequence of digits which will be interpreted as
+        the specific episode number.
+
+    %f  Matches and captures the remaining non-dot characters of the file name
+        and interprets it as the file name suffix to include on the output file.
+
+    %%  Matches the literal character `%`.
+
+EXAMPLES
+    Consider a directory with the following files:
+
+        ./fullmetal_alchemist_brotherhood_-_01_[1080p_bd-rip].mkv
+        ./fullmetal_alchemist_brotherhood_-_02_[1080p_bd-rip].mkv
+        ./fullmetal_alchemist_brotherhood_-_03_[1080p_bd-rip].mkv
+        ...
+
+    Running `ep_rename.py -t "Fullmetal Alchemist Brotherhood"` will create the
+    following symbolic links in the same directory:
+
+        ./Fullmetal Alchemist Brotherhood 01.mkv
+        ./Fullmetal Alchemist Brotherhood 02.mkv
+        ./Fullmetal Alchemist Brotherhood 03.mkv
+        ...
 ''',
     add_help=False,
     formatter_class=argparse.RawDescriptionHelpFormatter
@@ -80,7 +111,7 @@ argparser.add_argument(
 argparser.add_argument(
     '-t', '--title',
     required=True,
-    help='The title to begin each filename with.'
+    help='The title to begin each file name with.'
 )
 argparser.add_argument(
     '-s', '--season',
@@ -148,6 +179,13 @@ argparser.add_argument(
           links). Use the `any` choice if you don\'t care which file is chosen.'
 )
 argparser.add_argument(
+    '--input-fmt',
+    default='%b%a%n%a.%f',
+    metavar='FMT',
+    help='Specifies how the input file name should be parsed. See the INPUT \
+          FORMAT section below for details. The default is "%%b%%a%%n%%a.%%f"'
+)
+argparser.add_argument(
     '--dry',
     action='store_true',
     help='Perform a dry run; don\'t modify the filesystem.'
@@ -188,38 +226,104 @@ class Number:
         # use negative infinity so episodes without seasons can still be sorted
         return self.__key() < other.__key()
 
+def extract_general_number(input, s):
+    seasoned = re.fullmatch(r'[sS]([0-9]+)[eE]([0-9]+)', s)
+    if seasoned:
+        season, episode = seasoned.group(1, 2)
+    else:
+        season = None
+        episode = s
+    input['number'] = Number(season, episode)
+
+def extract_suffix(input, s):
+    input['suffix'] = s
+
 class Program:
     def __init__(self, args):
         self.args = args
+        self.input_fmt_regex = None
+        self.input_fmt_methods = None
+        self.construct_input_fmt()
 
     def log(self, level, msg):
         if level <= self.args.verbose:
             print(msg, file=sys.stderr)
 
+    def construct_input_fmt(self):
+        fmt = self.args.input_fmt
+        regex = r''
+        methods = []
+        specified_number = False
+        while len(fmt) > 0:
+            if fmt[0] == '%':
+                c = fmt[1]
+                fmt = fmt[2:]
+                if c == 'a':
+                    regex += r'.*?'
+                elif c == 'A':
+                    regex += r'.+?'
+                elif c == 'b':
+                    regex += r'(?:\[.*?\])*'
+                elif c == 'n':
+                    regex += '((?:[sS][0-9]+[eE][0-9]+)|(?:[0-9]+))'
+                    methods.append(extract_general_number)
+                    specified_number = True
+                elif c == 'f':
+                    regex += r'([^\.]+)$'
+                    methods.append(extract_suffix)
+                    if len(fmt) > 0:
+                        self.log(0, 'cannot include anything in `--input-fmt` \
+                                     after the `%f` pattern group')
+                        sys.exit(1)
+                else:
+                    self.log(0, ('unrecognized pattern group `%{}` used in ' +
+                                 '`--input-fmt`').format(c))
+                    sys.exit(1)
+            else:
+                c = fmt[0]
+                fmt = fmt[1:]
+                if c in '.^$*+?{}\\[]|()':
+                    regex += '\\' + c
+                else:
+                    regex += c
+
+        if not specified_number:
+            self.log(0, 'must specify a way to infer episode numbers when using'
+                        + ' `--input-fmt`')
+            sys.exit(1)
+
+        self.log(2, 'input_fmt: regex=' + repr(regex))
+        self.log(2, 'input_fmt: methods=' + repr(methods))
+        self.input_fmt_regex = regex
+        self.input_fmt_methods = methods
+
     def extract_input(self, f):
-        # remove group prefixes like `./[SubGroup] Title.mkv`
         input = {}
         input['file'] = f
+        input['suffix'] = None
 
-        without_group = re.fullmatch(r'(?:\[.*?\])?(.*)', f.name).group(1)
-        seasoned = re.search(r'[sS]([0-9]+)[eE]([0-9]+).*(\..+)', without_group)
-        unseasoned = re.search(r'([0-9]+).*(\..+)', without_group)
-        if seasoned:
-            season, episode, suffix = seasoned.group(1, 2, 3)
-        elif unseasoned:
-            episode, suffix = unseasoned.group(1, 2)
-            season = None
-        input['number'] = Number(season, episode)
-        input['suffix'] = suffix
+        m = re.fullmatch(self.input_fmt_regex, f.name)
+        if not m:
+            self.log(0, 'warning: skipping file ' + repr(str(f)))
+            return None
 
+        groups = m.group(*[i + 1 for i in range(len(self.input_fmt_methods))])
+        for field, s in zip(self.input_fmt_methods, groups):
+            field(input, s)
+
+        season = input['number'].season
+        episode = input['number'].episode
+        suffix = input['suffix']
         self.log(2,
                  'extracted season={!r} episode={!r} suffix={!r} from file={!r}'
                  .format(season, episode, suffix, str(f)))
+
         return input
 
     def run(self):
         files = [f for f in Path('.').iterdir() if f.is_file()]
-        inputs = list(map(self.extract_input, files))
+        inputs = map(self.extract_input, files)
+        inputs = list(filter(lambda x: x is not None, inputs))
         sort_inputs_by_num(inputs)
 
         if self.args.skip:
@@ -316,7 +420,7 @@ class Program:
 
     def calc_destinations(self, inputs):
         for input in inputs:
-            name = '{} {number}{suffix}'.format(self.args.title, **input)
+            name = '{} {number}.{suffix}'.format(self.args.title, **input)
             input['dest'] = Path(self.args.destination or './', name)
 
     def check_overwrites(self, inputs):
