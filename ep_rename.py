@@ -89,12 +89,26 @@ argparser.add_argument(
     dest='renumber',
     help='Number files beginning at 1 in order rather than using extracted \
           episode number. This is useful if you have multiple seasons and the \
-          episode numbers do not reset to 1 at the beginning of each season.'
+          episode numbers do not reset to 1 at the beginning of each season. \
+          Implies `--renumber-start 1`'
+)
+argparser.add_argument(
+    '--renumber-start',
+    metavar='N',
+    help='Start renumbering files beginning at N instead of 1'
+)
+argparser.add_argument(
+    '--strip-season',
+    action='store_true',
+    help='If the input files follow the s1e1 s1e2 etc pattern, remove the \
+          season prefix and renumber the files such that the first episode of \
+          season two is numbered directly after last episode of season one. \
+          Implies `--renumber --renumer-start 1`'
 )
 argparser.add_argument(
     '--strip-leading-zeros',
     action='store_true',
-    help='Change the episode number from 01 to 1 etc.'
+    help='Change the season or episode number from 01 to 1 etc.'
 )
 class AUTO_ZERO_PAD:
     def __int__(self):
@@ -141,7 +155,29 @@ def sort_inputs_by_time(paths):
     paths.sort(key=lambda p: p['file'].stat().st_mtime)
 
 def sort_inputs_by_num(parts):
-    parts.sort(key=lambda p: int(p['number'])) # handle sorting ep 101 after episode 2
+    parts.sort(key=lambda p: p['number'])
+
+class Number:
+    def __init__(self, season, episode):
+        self.season = season
+        self.episode = episode
+
+    def __str__(self):
+        if self.season:
+            return "s{}e{}".format(self.season, self.episode)
+        else:
+            return str(self.episode)
+
+    def __eq__(self, other):
+        return self.season == other.season and self.episode == other.episode
+
+    def __key(self):
+        return (int(self.season) if self.season else float('-inf'), int(self.episode))
+
+    def __lt__(self, other):
+        # handle sorting ep 101 after episode 2 by converting to numbers
+        # use negative infinity so episodes without seasons can still be sorted
+        return self.__key() < other.__key()
 
 class Program:
     def __init__(self, args):
@@ -153,14 +189,24 @@ class Program:
 
     def extract_parts(self, f):
         # remove group prefixes like `./[SubGroup] Title.mkv`
+        parts = {}
+        parts['file'] = f
+
         without_group = re.fullmatch(r'(?:\[.*?\])?(.*)', f.name).group(1)
-        number, suffix = re.search(r'([0-9]+).*(\..+)', without_group).group(1, 2)
+        seasoned = re.search(r'[sS]([0-9]+)[eE]([0-9]+).*(\..+)', without_group)
+        unseasoned = re.search(r'([0-9]+).*(\..+)', without_group)
+        if seasoned:
+            season, episode, suffix = seasoned.group(1, 2, 3)
+        elif unseasoned:
+            episode, suffix = unseasoned.group(1, 2)
+            season = None
+        parts['number'] = Number(season, episode)
+        parts['suffix'] = suffix
 
         self.log(2,
-                 'extracted number={!r} suffix={!r} from file={!r}'
-                 .format(number, suffix, str(f)))
-
-        return { 'file': f, 'number': number, 'suffix': suffix }
+                 'extracted season={!r} episode={!r} suffix={!r} from file={!r}'
+                 .format(season, episode, suffix, str(f)))
+        return parts
 
     def run(self):
         files = [f for f in Path('.').iterdir() if f.is_file()]
@@ -180,7 +226,9 @@ class Program:
                             .format(len(parts), first))
             parts = parts[:first]
 
-        self.try_renumber_or_strip_leading_zeros(parts)
+        self.try_renumber(parts)
+        self.try_strip_leading_zeros(parts)
+        self.try_strip_season(parts)
         self.try_zero_pad(parts)
         self.calc_destinations(parts)
 
@@ -197,39 +245,58 @@ class Program:
                 new.symlink_to(old.resolve())
             self.log(1, 'created symbolic link from {!r} to {!r}'.format(str(new), str(old)))
 
-    def try_renumber_or_strip_leading_zeros(self, parts):
+    def log_renumbered(self, func, part, old, new):
+        if old != new:
+            self.log(2, '{}: renumbered {!r} from {} to {}'
+                        .format(func, str(part['file']), old, new))
+
+    def try_renumber(self, parts):
         if self.args.renumber:
-            i = 1
+            i = int(self.args.renumber_start)
             for p in parts:
-                self.log(2, 'renumbered {} to {}'.format(p['number'], i))
-                p['number'] = str(i)
+                old = p['number']
+                new = Number(old.season, str(i))
+                p['number'] = new
                 i += 1
-        elif self.args.strip_leading_zeros:
+                self.log_renumbered('renumber', p, old, new)
+
+    def try_strip_season(self, parts):
+        if self.args.strip_season:
             for p in parts:
-                numer = p['number']
-                if number.startswith('0') and len(number) > 1:
-                    self.log(2, 'renumbered {} to {}'.format(number, i))
-                    p['number'] = number.lstrip('0')
+                old = p['number']
+                new = Number(None, old.episode)
+                new.season = None
+                p['number'] = new
+                self.log_renumbered('strip_season', p, old, new)
+
+
+    def try_strip_leading_zeros(self, parts):
+        if self.args.strip_leading_zeros:
+            for p in parts:
+                old = p['number']
+                new = Number(None, None)
+                new.episode = new.episode.lstrip('0') or '0'
+                new.season = new.season.lstrip('0') or '0'
+                p['number'] = new
+                self.log_renumbered('strip_leading_zeros', p, old, new)
 
     def try_zero_pad(self, parts):
         if self.args.zero_pad:
             if type(self.args.zero_pad) is AUTO_ZERO_PAD:
-                width = max(map(lambda p: len(p['number']), parts))
+                width = max(map(lambda p: len(str(p['number'])), inputs))
             else:
                 width = int(self.args.zero_pad)
 
             fmt = '{{:0>{}}}'.format(width)
             for p in parts:
                 old = p['number']
-                new = fmt.format(old)
+                new = Number(old.season, fmt.format(old.episode))
                 p['number'] = new
-                self.log(2, 'renumbered {} to {}'.format(old, new))
-
+                self.log_renumbered('zero_pad', p, old, new)
 
     def calc_destinations(self, parts):
-        ep_prefix = 's{}e'.format(self.args.season) if self.args.season else ''
         for p in parts:
-            name = '{} {}{number}{suffix}'.format(self.args.title, ep_prefix, **p)
+            name = '{} {number}{suffix}'.format(self.args.title, **p)
             p['dest'] = Path(self.args.destination or './', name)
 
 
@@ -325,12 +392,27 @@ if args.first and not is_nonneg(args.first):
 if args.skip and not is_nonneg(args.skip):
     argparser.error('must specify a positive integer to `--skip`')
 
+if args.renumber_start and not is_nonneg(args.renumber_start):
+    argparser.error('must specify a positive integer to `--renumber_start`')
+
 if (args.skip or args.first) and not args.destination:
-    argparser.error('must specify a destination with `--destination` while '
-                    + 'using `--skip` or `--first` because they will change '
-                    + 'the set of files in this directory')
+    argparser.error('must specify a destination with `-d/--destination` while '
+                    + 'using `--skip` or `--first` because you most likely '
+                    + 'want to use this command more than once.')
+
+if args.season and args.strip_season:
+    argparser.error('cannot specify both `--season` and `--strip-season`')
 
 if args.skip and args.renumber is None:
     args.renumber = True
+
+if args.strip_season and args.renumber is None:
+    args.renumber = True
+
+if args.renumber and args.renumber_start is None:
+    args.renumber_start = 1
+
+if args.renumber_start and not args.renumber:
+    argparser.error('cannot specify `--renumber-start` without `--renumber`')
 
 Program(args).run()
