@@ -358,7 +358,7 @@ class Program:
         elif self.args.output_type == 'copy':
             method = lambda new, old: shutil.copy2(old, new)
             msg = 'copied file to {new!r} from {old!r}'
-        elif self.args.output_type == 'rename':
+        elif self.args.output_type == 'move':
             method = lambda new, old: shutil.move(old, new)
             msg = 'moved file to {new!r} from {old!r}'
 
@@ -366,7 +366,7 @@ class Program:
             old = input['file']
             new = input['dest']
 
-            if self.args.output_type != 'rename':
+            if self.args.output_type != 'move':
                 old = old.resolve()
 
             if not self.args.dry:
