@@ -419,14 +419,14 @@ class Program:
     def try_zero_pad(self, inputs):
         if self.args.zero_pad:
             if type(self.args.zero_pad) is AUTO_ZERO_PAD:
-                width = max(map(lambda input: len(str(input['number'])), inputs))
+                width = max(map(lambda input: len(str(int(input['number'].episode))), inputs))
             else:
                 width = int(self.args.zero_pad)
 
             fmt = '{{:0>{}}}'.format(width)
             for input in inputs:
                 old = input['number']
-                new = Number(old.season, fmt.format(old.episode))
+                new = Number(old.season, fmt.format(int(old.episode)))
                 input['number'] = new
                 self.log_renumbered('zero_pad', input, old, new)
 
