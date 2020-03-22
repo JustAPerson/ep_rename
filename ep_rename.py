@@ -92,11 +92,12 @@ argparser.add_argument(
 )
 argparser.add_argument(
     '--output-type',
-    choices=['symlink', 'hardlink', 'copy'],
+    choices=['symlink', 'hardlink', 'copy', 'move'],
     default='symlink',
     help='Specifies the file type used for the output. Both `symlink` and \
           `hardlink` take negligibly additional disk space whereas `copy` \
-          makes an extra copy of the file.'
+          makes an extra copy of the file. Finally, `move` simply moves \
+          the existing file from one location to another.'
 )
 argparser.add_argument(
     '--first',
@@ -357,10 +358,16 @@ class Program:
         elif self.args.output_type == 'copy':
             method = lambda new, old: shutil.copy2(old, new)
             msg = 'copied file to {new!r} from {old!r}'
+        elif self.args.output_type == 'rename':
+            method = lambda new, old: shutil.move(old, new)
+            msg = 'moved file to {new!r} from {old!r}'
 
         for input in inputs:
-            old = input['file'].resolve()
+            old = input['file']
             new = input['dest']
+
+            if self.args.output_type != 'rename':
+                old = old.resolve()
 
             if not self.args.dry:
                 if self.args.overwrite and new.exists():
