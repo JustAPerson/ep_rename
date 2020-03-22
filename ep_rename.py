@@ -53,19 +53,10 @@ argparser.add_argument(
     help='Display this help message.'
 )
 argparser.add_argument(
-    '-t', '--title',
-    required=True,
-    help='The title to begin each filename with.'
-)
-argparser.add_argument(
     '-d', '--destination',
     metavar='DIR',
     help='The destination directory where new symbolic links will be created. \
           Assumed to be the current directory.'
-)
-argparser.add_argument(
-    '-s', '--season',
-    help='If specified, episode numbers will follow the s1e1 s1e2 etc pattern.'
 )
 argparser.add_argument(
     '--first',
@@ -76,6 +67,16 @@ argparser.add_argument(
     '--skip',
     metavar='N',
     help='Skip the first N files in sorted order. Implies `--renumber`.'
+)
+argparser.add_argument(
+    '-t', '--title',
+    required=True,
+    help='The title to begin each filename with.'
+)
+argparser.add_argument(
+    '-s', '--season',
+    help='If specified, episode numbers will follow the s1e1 s1e2 etc pattern. \
+          The inverse can be done with `--strip-season`'
 )
 class NegateAction(argparse.Action):
     """Taken from https://stackoverflow.com/a/34736291/5991105"""
